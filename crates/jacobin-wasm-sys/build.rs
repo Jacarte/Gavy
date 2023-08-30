@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use hyper::body::Incoming;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{env, fs, process};
 
 use http_body_util::BodyExt;
@@ -11,7 +11,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use walkdir::WalkDir;
 
 const GO_VERSION_MAJOR: &str = "1.21.0";
-// const WASI_SDK_VERSION_MINOR: usize = 0;
+const JAVA_VERSION: &str = "17.0.8";
 
 async fn tls_connect(url: &Uri) -> Result<impl AsyncRead + AsyncWrite + Unpin> {
     let connector: tokio_native_tls::TlsConnector =
@@ -62,6 +62,85 @@ async fn get_uri(url_str: impl AsRef<str>) -> Result<Incoming> {
     }
 }
 
+async fn download_java() -> Result<PathBuf> {
+    let mut java_dir: PathBuf = env::var("OUT_DIR")?.into();
+    java_dir.push("java");
+
+    fs::create_dir_all(&java_dir)?;
+
+    let mut archive_path = java_dir.clone();
+    archive_path.push(format!("openjdk-{}.tar.gz", JAVA_VERSION));
+
+    // Download archive if necessary
+    if !archive_path.try_exists()? {
+        let file_suffix = match (env::consts::OS, env::consts::ARCH) {
+            ("linux", "x86") | ("linux", "x86_64") => "linux",
+            ("macos", "x86") | ("macos", "x86_64") | ("macos", "aarch64") => "_macos-x64_bin",
+            ("windows", "x86") => "windows-x86_bin",
+            ("windows", "x86_64") => "windows-x64_bin",
+            ("windows", "x86") => "mingw-x86",
+            ("windows", "x86_64") => "mingw",
+            other => return Err(anyhow!("Unsupported platform tuple {:?}", other)),
+        };
+
+        let uri = format!(
+            "https://download.oracle.com/java/17/archive/jdk-{JAVA_VERSION}{file_suffix}.tar.gz"
+        );
+        let mut body = get_uri(uri).await?;
+        let mut archive = fs::File::create(&archive_path)?;
+        while let Some(frame) = body.frame().await {
+            if let Some(chunk) = frame
+                .map_err(|err| anyhow!("Something went wrong when downloading the JDK: {}", err))?
+                .data_ref()
+            {
+                archive.write_all(chunk.chunk())?;
+            }
+        }
+    };
+
+    let mut test_binary = java_dir.clone();
+
+    test_binary.push(format!("jdk-{}.jdk", JAVA_VERSION));
+    match env::consts::OS {
+        "linux" => {
+            test_binary.push("bin");
+            test_binary.push("java");
+        }
+        "macos" => {
+            test_binary.push("Contents");
+            test_binary.push("Home");
+            test_binary.push("bin");
+            test_binary.push("java");
+        }
+        "windows" => {
+            test_binary.push("bin");
+            test_binary.push("java.exe");
+        }
+        other => return Err(anyhow!("Unsupported platform {:?}", other)),
+    }
+    // Extract archive if necessary
+    if !test_binary.try_exists()? {
+        let output = process::Command::new("tar")
+            .args([
+                "-xf",
+                archive_path.to_string_lossy().as_ref(),
+                "--strip-components",
+                "1",
+            ])
+            .current_dir(&java_dir)
+            .output()?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "Unpacking JDK failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
+    // TODO we need to generate the address to the home, it changes from OS to OS :(
+
+    Ok(java_dir)
+}
+
 async fn download_go() -> Result<PathBuf> {
     let mut go_dir: PathBuf = env::var("OUT_DIR")?.into();
     go_dir.push("go");
@@ -86,12 +165,7 @@ async fn download_go() -> Result<PathBuf> {
         let mut archive = fs::File::create(&archive_path)?;
         while let Some(frame) = body.frame().await {
             if let Some(chunk) = frame
-                .map_err(|err| {
-                    anyhow!(
-                        "Something went wrong when downloading the WASI SDK: {}",
-                        err
-                    )
-                })?
+                .map_err(|err| anyhow!("Something went wrong when downloading Go: {}", err))?
                 .data_ref()
             {
                 archive.write_all(chunk.chunk())?;
@@ -132,9 +206,20 @@ async fn get_go_path() -> Result<PathBuf> {
     download_go().await
 }
 
+async fn get_java_path() -> Result<PathBuf> {
+    const JAVA_PATH_ENV_VAR: &str = "JACOBIN_JAVA_PATH";
+    println!("cargo:rerun-if-env-changed={JAVA_PATH_ENV_VAR}");
+    if let Ok(path) = env::var(JAVA_PATH_ENV_VAR) {
+        return Ok(path.into());
+    }
+    download_java().await
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let go_path = get_go_path().await?;
+    let _java_path = get_java_path().await?;
+
     if !go_path.try_exists()? {
         return Err(anyhow!(
             "go not installed in specified path of {}",
@@ -151,7 +236,7 @@ async fn main() -> Result<()> {
         .output()?;
     if !output.status.success() {
         return Err(anyhow!(
-            "Compaling jacobin failed: {}",
+            "Compiling jacobin failed: {}",
             String::from_utf8_lossy(&output.stderr)
         ));
     }
