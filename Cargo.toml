@@ -1,0 +1,22 @@
+[workspace]
+members = [
+  "crates/jacobin-wasm-sys",
+]
+
+[workspace.package]
+version = "0.0.1"
+authors = ["Jacarte jacarte9212@gmail.com"]
+edition = "2021"
+
+[workspace.dependencies]
+wasmtime = "9.0"
+wasmtime-wasi = "9.0"
+wasi-common = "9.0"
+anyhow = "1.0"
+once_cell = "1.16"
+gavy = { path = "crates/gavy", version = "0.0.1" }
+
+
+[profile.release]
+lto = true
+opt-level = 3
