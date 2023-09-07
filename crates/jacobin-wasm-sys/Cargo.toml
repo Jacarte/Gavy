@@ -5,13 +5,15 @@ authors.workspace = true
 edition.workspace = true
 description = "Rust bindings for Wasm build of Jacobin"
 
+[dependencies]
+anyhow.workspace = true
 
 [build-dependencies]
 cc = "1.0"
 bindgen = "0.64.0"
 walkdir = "2"
-anyhow.workspace = true
 
+anyhow.workspace = true
 # The dependencies below are pinned so they map exactly to the exemptions
 native-tls = "0.2.11"
 openssl-macros = "=0.1.0"
@@ -27,5 +29,6 @@ http-body-util = "=0.1.0-rc.2"
 tokio-native-tls = "=0.3.1"
 
 [dev-dependencies]
+wizer = "3.0"
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }

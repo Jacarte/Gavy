@@ -11,7 +11,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use walkdir::WalkDir;
 
 const GO_VERSION_MAJOR: &str = "1.21.0";
-const JAVA_VERSION: &str = "17.0.8";
+//https://download.java.net/java/GA/jdk11/9/GPL/openjdk-11.0.2_osx-x64_bin.tar.gz
+const JAVA_VERSION: &str = "11.0.2";
 
 async fn tls_connect(url: &Uri) -> Result<impl AsyncRead + AsyncWrite + Unpin> {
     let connector: tokio_native_tls::TlsConnector =
@@ -84,7 +85,7 @@ async fn download_java() -> Result<PathBuf> {
         };
 
         let uri = format!(
-            "https://download.oracle.com/java/17/archive/jdk-{JAVA_VERSION}{file_suffix}.tar.gz"
+            "https://download.java.net/java/GA/jdk11/9/GPL/openjdk-11.0.2_osx-x64_bin.tar.gz" //"https://download.oracle.com/java/17/archive/jdk-{JAVA_VERSION}{file_suffix}.tar.gz"
         );
         let mut body = get_uri(uri).await?;
         let mut archive = fs::File::create(&archive_path)?;
@@ -102,22 +103,14 @@ async fn download_java() -> Result<PathBuf> {
 
     test_binary.push(format!("jdk-{}.jdk", JAVA_VERSION));
     match env::consts::OS {
-        "linux" => {
-            test_binary.push("bin");
-            test_binary.push("java");
-        }
+        "linux" => {}
         "macos" => {
             test_binary.push("Contents");
             test_binary.push("Home");
-            test_binary.push("bin");
-            test_binary.push("java");
         }
-        "windows" => {
-            test_binary.push("bin");
-            test_binary.push("java.exe");
-        }
+        "windows" => {}
         other => return Err(anyhow!("Unsupported platform {:?}", other)),
-    }
+    };
     // Extract archive if necessary
     if !test_binary.try_exists()? {
         let output = process::Command::new("tar")
@@ -137,6 +130,15 @@ async fn download_java() -> Result<PathBuf> {
         }
     }
     // TODO we need to generate the address to the home, it changes from OS to OS :(
+    // Write a binding.rs file
+    let mut binding_file: PathBuf = env::var("OUT_DIR")?.into();
+    binding_file.push("binding.rs");
+    let mut binding_file = fs::File::create(&binding_file)?;
+    let mut binding = String::new();
+    binding.push_str("pub const JAVA_HOME: &str = \"");
+    binding.push_str(test_binary.to_string_lossy().as_ref());
+    binding.push_str("\";");
+    binding_file.write_all(binding.as_bytes())?;
 
     Ok(java_dir)
 }
@@ -250,7 +252,10 @@ async fn main() -> Result<()> {
     for entry in WalkDir::new("jacobin") {
         println!("cargo:rerun-if-changed={}", entry?.path().display());
     }
+    for entry in WalkDir::new("src") {
+        println!("cargo:rerun-if-changed={}", entry?.path().display());
+    }
+
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=src/lib.rs");
     Ok(())
 }
